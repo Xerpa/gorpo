@@ -23,7 +23,6 @@ defmodule Gorpo.Drivers.HTTPC do
     opts = options
     |> Keyword.put_new(:timeout, 5000)
     |> Keyword.put_new(:connect_timeout, 30000)
-    |> Keyword.put(:body_format, :string)
     |> Keyword.put(:autoredirect, false)
     fn method, url, headers, payload, options ->
       url = append_qstring(url, options[:params])

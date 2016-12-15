@@ -112,10 +112,12 @@ defmodule Gorpo.Announce.Unit do
       do: Process.cancel_timer(state[:timer])
 
     service = state[:service]
+    svcstat = state[:service_stat]
     svcname = "#{service.name}.#{service.id}"
     case process_tick(state) do
       {:ok, state}          ->
-        Logger.debug("#{__MODULE__} #{svcname}: ok")
+        if :ok != svcstat,
+          do: Logger.debug("#{__MODULE__} #{svcname}: ok")
         timer = Process.send_after(self, :tick, state[:wait])
         {:noreply, st_ok(state) |> Keyword.put(:timer, timer)}
       {:error, reason, state} ->
