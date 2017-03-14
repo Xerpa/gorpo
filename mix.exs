@@ -18,7 +18,7 @@ defmodule Gorpo.Mixfile do
 
   defp deps do
     [{:poison, ">= 1.2.0"},
-     {:dialyxir, ">= 0.4.0", only: [:dev]},
+     {:dialyxir, ">= 0.5.0", only: [:dev], runtime: false},
      {:ex_doc, ">= 0.14.3", only: [:dev]}]
   end
 
