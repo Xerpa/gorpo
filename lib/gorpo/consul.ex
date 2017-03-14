@@ -48,6 +48,8 @@ defmodule Gorpo.Consul do
                          token: String.t | nil,
                          driver: (method_t, url_t, headers_t, payload_t, options_t -> reply_t)}
 
+  @type session_t :: String.t
+
   @doc """
   search for services.
 
@@ -66,7 +68,7 @@ defmodule Gorpo.Consul do
   @spec services(t,
     String.t,
     [dc: String.t, tag: String.t, near: boolean, status: :passing]
-  ) :: reply_t
+  ) :: {:ok, [Gorpo.Service.t]} | reply_t
   def services(cfg, svcname, filters \\ []) do
     path   = "/v1/health/service/#{svcname}"
     params = Enum.reduce(filters, [], fn {k, v}, acc ->
@@ -115,7 +117,7 @@ defmodule Gorpo.Consul do
   @doc """
   update health check status for a given service.
   """
-  @spec check_update(t, Gorpo.Service.t, Gorpo.Status.t) :: reply_t | {:error, :enocheck}
+  @spec check_update(t, Gorpo.Service.t, Gorpo.Status.t) :: reply_t | {:error, :not_found}
   def check_update(cfg, service, status) do
     check_id = Gorpo.Service.check_id(service)
     if check_id do
@@ -124,8 +126,75 @@ defmodule Gorpo.Consul do
       driver_req(cfg, :put, path, json_headers(), json, [])
       |> replyok_when(& &1[:status] == 200)
     else
-      {:error, :enocheck}
+      {:error, :not_found}
     end
+  end
+
+  @doc """
+  acquires a new session using the TTL method.
+  """
+  @spec session_create(t, [lock_delay: String.t, ttl: String.t, behaviour: String.t]) :: {:ok, session_t} | :error
+  def session_create(cfg, opts \\ [lock_delay: "15s", ttl: "60s", behaviour: "release"]) do
+    params = %{"LockDelay" => Keyword.get(opts, :lock_delay, "15s"),
+               "TTL" => Keyword.get(opts, :ttl, "60s"),
+               "Behaviour" => Keyword.get(opts, :behaviour, "release")}
+    path = "/v1/session/create"
+    driver_req(cfg, :put, path, json_headers(), params, [])
+    |> replyok_when(& &1[:status] == 200)
+    |> case do
+         {:ok, reply} ->
+           reply[:payload]
+           |> Poison.decode!
+           |> Map.fetch("ID")
+         _otherwise   -> :error
+       end
+  end
+
+  @doc """
+  destroys a session.
+  """
+  @spec session_destroy(t, session_t) :: :ok | :error
+  def session_destroy(cfg, session_id) do
+    path = "/v1/session/destroy/#{session_id}"
+    driver_req(cfg, :put, path, json_headers(), nil, [])
+    |> case do
+         {:ok, _}   -> :ok
+         _otherwise -> :error
+       end
+  end
+
+  @doc """
+  information about the session
+  """
+  @spec session_info(t, session_t) :: {:ok, map()} | {:error, :not_found} | :error
+  def session_info(cfg, session_id) do
+    path = "/v1/session/info/#{session_id}"
+    driver_req(cfg, :get, path, json_headers(), nil, [])
+    |> replyok_when(& &1[:status] == 200)
+    |> case do
+         {:ok, reply} ->
+           reply[:payload]
+           |> Poison.decode!
+           |> case do
+                nil -> {:error, :not_found}
+                data -> {:ok, data}
+              end
+         {:error, _}  -> :error
+       end
+  end
+
+  @doc """
+  renews a session
+  """
+  @spec session_renew(t, session_t) :: :ok | :error
+  def session_renew(cfg, session_id) do
+    path = "/v1/session/renew/#{session_id}"
+    driver_req(cfg, :put, path, json_headers(), nil, [])
+    |> replyok_when(& &1[:status] == 200)
+    |> case do
+         {:ok, _}   -> :ok
+         _otherwise -> :error
+       end
   end
 
   defp json_headers, do: [{"content-type", "application/json"},
