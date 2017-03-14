@@ -77,7 +77,7 @@ defmodule Gorpo do
   @spec start(any, any) :: {:ok, pid}
   def start(_type, _args) do
     :ok = inets_start()
-    consul   = read_consul(consul_cfg())
+    consul   = new_consul()
     services = read_services(announce_cfg())
     announce = Supervisor.Spec.worker(Gorpo.Announce, [consul, services], restart: :permanent)
     Supervisor.start_link([announce], strategy: :one_for_one)
@@ -88,6 +88,15 @@ defmodule Gorpo do
       :ok -> :ok
       {:error, {:already_started, :inets}} -> :ok
     end
+  end
+
+  @doc """
+  uses the Application.get_env(:gorpo, :consul) to configure and
+  return Gorpo.Consul module.
+  """
+  @spec new_consul() :: Gorpo.Consul.t
+  def new_consul do
+    read_consul(consul_cfg())
   end
 
   defp read_consul(config) do
