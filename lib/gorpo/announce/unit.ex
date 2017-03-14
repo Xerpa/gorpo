@@ -118,12 +118,12 @@ defmodule Gorpo.Announce.Unit do
       {:ok, state}          ->
         if :ok != svcstat,
           do: Logger.debug("#{__MODULE__} #{svcname}: ok")
-        timer = Process.send_after(self, :tick, state[:wait])
+        timer = Process.send_after(self(), :tick, state[:wait])
         {:noreply, st_ok(state) |> Keyword.put(:timer, timer)}
       {:error, reason, state} ->
         reason = inspect(reason)
         Logger.warn "#{__MODULE__} #{svcname}: #{reason} [backoff: #{state[:wait]}]"
-        timer = Process.send_after(self, :tick, state[:wait])
+        timer = Process.send_after(self(), :tick, state[:wait])
         {:noreply, st_error(state) |> Keyword.put(:timer, timer)}
     end
   end

@@ -76,9 +76,9 @@ defmodule Gorpo do
   """
   @spec start(any, any) :: {:ok, pid}
   def start(_type, _args) do
-    :ok = inets_start
-    consul   = read_consul(consul_cfg)
-    services = read_services(announce_cfg)
+    :ok = inets_start()
+    consul   = read_consul(consul_cfg())
+    services = read_services(announce_cfg())
     announce = Supervisor.Spec.worker(Gorpo.Announce, [consul, services], restart: :permanent)
     Supervisor.start_link([announce], strategy: :one_for_one)
   end

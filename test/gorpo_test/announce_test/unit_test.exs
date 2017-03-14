@@ -30,7 +30,7 @@ defmodule Gorpo.Announce.UnitTest do
   end
 
   test "success initialization" do
-    {:ok, state}      = Gorpo.Announce.Unit.init(state)
+    {:ok, state}      = Gorpo.Announce.Unit.init(state())
     {:reply, stat, _} = Gorpo.Announce.Unit.handle_call(:stat, nil, state)
     assert state[:wait] == state[:tick]
     assert :ok == stat[:service]

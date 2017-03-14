@@ -79,9 +79,9 @@ defmodule Gorpo.Consul do
       end
     end)
 
-    reply = driver_req(cfg, :get, path, [{"accept", "application/json"}], nil, [params: params])
+    driver_req(cfg, :get, path, [{"accept", "application/json"}], nil, [params: params])
     |> replyok_when(& &1[:status] == 200)
-    case reply do
+    |> case do
       {:ok, reply} ->
         services = reply[:payload]
         |> Poison.decode!
@@ -98,7 +98,7 @@ defmodule Gorpo.Consul do
   def service_register(cfg, service) do
     path = "/v1/agent/service/register"
     json = Poison.encode!(service)
-    driver_req(cfg, :put, path, json_headers, json, [])
+    driver_req(cfg, :put, path, json_headers(), json, [])
     |> replyok_when(& &1[:status] == 200)
   end
 
@@ -108,7 +108,7 @@ defmodule Gorpo.Consul do
   @spec service_deregister(t, String.t) :: reply_t
   def service_deregister(cfg, svcid) do
     path = "/v1/agent/service/deregister/#{svcid}"
-    driver_req(cfg, :post, path, json_headers, nil, [])
+    driver_req(cfg, :post, path, json_headers(), nil, [])
     |> replyok_when(& &1[:status] == 200)
   end
 
@@ -121,7 +121,7 @@ defmodule Gorpo.Consul do
     if check_id do
       json = Poison.encode!(status)
       path = "/v1/agent/check/update/#{check_id}"
-      driver_req(cfg, :put, path, json_headers, json, [])
+      driver_req(cfg, :put, path, json_headers(), json, [])
       |> replyok_when(& &1[:status] == 200)
     else
       {:error, :enocheck}
