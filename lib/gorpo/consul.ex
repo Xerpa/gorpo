@@ -202,6 +202,48 @@ defmodule Gorpo.Consul do
        end
   end
 
+  @doc """
+  inserts a value into consul
+  """
+  @spec kv_put(t, String.t, binary) :: {:ok, any} | error_reply_t
+  def kv_put(cfg, key, body) do
+    path = "/v1/kv/#{key}"
+    driver_req(cfg, :put, path, json_headers(), body, [])
+    |> replyok_when(& &1[:status] == 200)
+    |> case do
+         {:ok, reply} -> {:ok, Poison.decode!(reply[:payload])}
+         error        -> error
+       end
+  end
+
+  @doc """
+  retrieves values from consul
+  """
+  @spec kv_get(t, String.t) :: {:ok, any} | error_reply_t
+  def kv_get(cfg, key) do
+    path = "/v1/kv/#{key}"
+    driver_req(cfg, :get, path, json_headers(), nil, [])
+    |> replyok_when(& &1[:status] == 200)
+    |> case do
+         {:ok, reply} -> {:ok, Poison.decode!(reply[:payload])}
+         error        -> error
+       end
+  end
+
+  @doc """
+  removes a key from consul
+  """
+  @spec kv_delete(t, String.t) :: :ok | error_reply_t
+  def kv_delete(cfg, key) do
+    path = "/v1/kv/#{key}"
+    driver_req(cfg, :delete, path, json_headers(), nil, [])
+    |> replyok_when(& &1[:status] == 200)
+    |> case do
+         {:ok, _} -> :ok
+         error    -> error
+       end
+  end
+
   defp json_headers, do: [{"content-type", "application/json"},
                           {"accept", "application/json"}]
 
