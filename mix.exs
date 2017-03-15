@@ -8,7 +8,8 @@ defmodule Gorpo.Mixfile do
      build_embedded: Mix.env == :prod,
      start_permanent: Mix.env == :prod,
      deps: deps(),
-     dialyzer: [plt_add_apps: [:poison, :inets]]]
+     dialyzer: [plt_add_apps: [:poison, :inets],
+                flags: [:unmatched_returns, :error_handling]]]
   end
 
   def application do
