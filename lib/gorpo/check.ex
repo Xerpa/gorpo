@@ -39,7 +39,7 @@ defmodule Gorpo.Check do
   </dl>
   """
 
-  defstruct [ttl: "5s", deregister_critical_service_after: "1440m"]
+  defstruct [ttl: "10s", deregister_critical_service_after: "10m"]
 
   @type t :: %__MODULE__{ttl: String.t,
                          deregister_critical_service_after: String.t}
