@@ -21,8 +21,8 @@ defmodule Gorpo.Drivers.HTTPC do
   ) :: (method_t, url_t, headers_t, payload_t, options_t -> reply_t)
   def new(options \\ []) do
     opts = options
-    |> Keyword.put_new(:timeout, 5000)
-    |> Keyword.put_new(:connect_timeout, 30000)
+    |> Keyword.put_new(:timeout, 30_000)
+    |> Keyword.put_new(:connect_timeout, 5_000)
     |> Keyword.put(:autoredirect, false)
     fn method, url, headers, payload, options ->
       url = append_qstring(url, options[:params])
