@@ -137,7 +137,7 @@ defmodule Gorpo.ConsulTest do
     driver  = Gorpo.Drivers.Echo.success([status: 200, payload: Poison.encode!([payload])])
     agent   = %Gorpo.Consul{endpoint: "endpoint", token: "token", driver: driver}
 
-    assert {:ok, payload} == Gorpo.Consul.session_info(agent, "foobar")
+    assert {:ok, payload, %{}} == Gorpo.Consul.session_info(agent, "foobar")
   end
 
   test "session info (not found)" do

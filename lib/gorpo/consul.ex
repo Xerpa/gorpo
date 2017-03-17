@@ -177,12 +177,17 @@ defmodule Gorpo.Consul do
     |> replyok_when(& &1[:status] == 200)
     |> case do
          {:ok, reply} ->
+           headers = reply
+           |> Keyword.get(:headers, [])
+           |> Enum.filter(fn {key, _} -> String.starts_with?(key, "x-consul-") end)
+           |> Enum.into(%{})
+
            reply[:payload]
            |> Poison.decode!
            |> case do
                 nil    -> {:error, :not_found}
                 []     -> {:error, :not_found}
-                [data] -> {:ok, data}
+                [data] -> {:ok, data, headers}
               end
          error        -> error
        end
