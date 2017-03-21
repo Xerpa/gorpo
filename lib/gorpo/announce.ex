@@ -156,8 +156,11 @@ defmodule Gorpo.Announce do
   defp do_unregister(service, state) do
     sup   = Keyword.fetch!(state, :supervisor)
     svcid = Gorpo.Service.id(service)
-    reply = with (:ok <- Supervisor.terminate_child(sup, svcid)) do
+    reply = with {:reply, pid, _} when is_pid(pid) <- do_whereis(service, state) do
+              :ok = GenServer.stop(pid)
               Supervisor.delete_child(sup, svcid)
+            else
+              {:reply, :unknown, _} -> {:error, :not_found}
             end
     {:reply, reply, state}
   end
