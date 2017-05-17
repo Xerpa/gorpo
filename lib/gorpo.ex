@@ -108,7 +108,9 @@ defmodule Gorpo do
   defp read_services(config) do
     config
     |> Keyword.fetch!(:services)
-    |> Enum.map(&read_service/1)
+    |> Enum.filter_map(
+      & Keyword.get(&1, :enabled, true),
+      & read_service/1)
   end
 
   defp read_service(service) do
