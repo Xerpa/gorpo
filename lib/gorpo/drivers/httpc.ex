@@ -26,9 +26,14 @@ defmodule Gorpo.Drivers.HTTPC do
     |> Keyword.put(:autoredirect, false)
     fn method, url, headers, payload, options ->
       url = append_qstring(url, options[:params])
+      content_type = Enum.find(headers, fn {k, _} -> k == "content-type" end)
+      |> case do
+           {_, value} -> encode_str(value)
+           nil -> []
+         end
       request = if method in [:get, :head],
                   do: {encode_str(url), encode_str(headers)},
-                  else: {encode_str(url), encode_str(headers), [], payload}
+                  else: {encode_str(url), encode_str(headers), content_type, payload}
       do_request(method, request, opts)
     end
   end
