@@ -337,7 +337,19 @@ defmodule Gorpo.Consul do
   end
 
   defp load_service(name, data) do
-    service = Gorpo.Service.load(name, Map.fetch!(data, "Service"))
+    node = Gorpo.Node.load(Map.fetch!(data, "Node"))
+    service_address =
+      fn address ->
+        if address == "" or is_nil(address) do
+          node.address
+        else
+          address
+        end
+      end
+    service =
+      name
+      |> Gorpo.Service.load(Map.fetch!(data, "Service"))
+      |> Map.update!(:address, service_address)
     result =
       data
       |> Map.fetch!("Checks")
@@ -346,9 +358,9 @@ defmodule Gorpo.Consul do
 
     case result do
       [] ->
-        {service, nil}
+        {node, service, nil}
       [status] ->
-        {service, status}
+        {node, service, status}
     end
   end
 end

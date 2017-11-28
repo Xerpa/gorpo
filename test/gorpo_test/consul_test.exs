@@ -46,46 +46,72 @@ defmodule Gorpo.ConsulTest do
   end
 
   test "reply services with no checks" do
+    node = %Gorpo.Node{id: "consul", address: "localhost"}
     service = %Gorpo.Service{id: "foobar", name: "foobar", port: 10, address: "localhost", tags: ["foo", "bar"]}
-    payload = Poison.encode!([%{"Service" => service, "Checks" => []}])
-    driver  = Gorpo.Drivers.Echo.success([status: 200, payload: payload])
-    agent   = %Gorpo.Consul{endpoint: "endpoint", token: "token", driver: driver}
+    payload = Poison.encode!([%{"Node"    => node,
+                                "Service" => service,
+                                "Checks" => []
+                               }])
+    driver = Gorpo.Drivers.Echo.success([status: 200, payload: payload])
+    agent = %Gorpo.Consul{endpoint: "endpoint", token: "token", driver: driver}
 
     {:ok, reply} = Gorpo.Consul.services(agent, "foobar")
-    assert [{service, nil}] == reply
+    assert [{node, service, nil}] == reply
+  end
+
+  test "use node address if service addresses is not set" do
+    node = %Gorpo.Node{id: "consul", address: "localhost"}
+    service = %Gorpo.Service{id: "foobar", name: "foobar", port: 10, address: "", tags: ["foo", "bar"]}
+    payload = Poison.encode!([%{"Node"    => node,
+                                "Service" => service,
+                                "Checks" => []
+                               }])
+    driver = Gorpo.Drivers.Echo.success([status: 200, payload: payload])
+    agent = %Gorpo.Consul{endpoint: "endpoint", token: "token", driver: driver}
+
+    {:ok, reply} = Gorpo.Consul.services(agent, "foobar")
+    assert [{node, %{service| address: node.address}, nil}] == reply
   end
 
   test "single service and a single check" do
-    status  = %Gorpo.Status{status: Enum.random([:passing, :warning, :critical])}
-    service = %Gorpo.Service{id: "foobar", name: "foobar"}
-    payload = Poison.encode!([%{"Service" => service, "Checks" => [%{"CheckID" => Gorpo.Service.check_id(service), "Status" => status.status}]}])
-    driver  = Gorpo.Drivers.Echo.success([status: 200, payload: payload])
-    agent   = %Gorpo.Consul{endpoint: "endpoint", token: "token", driver: driver}
+    node = %Gorpo.Node{id: "consul", address: "localhost"}
+    status = %Gorpo.Status{status: Enum.random([:passing, :warning, :critical])}
+    service = %Gorpo.Service{id: "foobar", name: "foobar", address: "localhost"}
+    payload = Poison.encode!([%{"Node"    => node,
+                                "Service" => service,
+                                "Checks"  => [%{"CheckID" => Gorpo.Service.check_id(service), "Status" => status.status}]
+                               }])
+    driver = Gorpo.Drivers.Echo.success([status: 200, payload: payload])
+    agent = %Gorpo.Consul{endpoint: "endpoint", token: "token", driver: driver}
 
     {:ok, reply} = Gorpo.Consul.services(agent, "foobar")
-    assert [{service, status}] == reply
+    assert [{node, service, status}] == reply
   end
 
   test "multiple services and checks" do
-    service_0 = %Gorpo.Service{id: "foobar_0", name: "foobar"}
-    service_1 = %Gorpo.Service{id: "foobar_1", name: "foobar"}
-    service_2 = %Gorpo.Service{id: "foobar_2", name: "foobar"}
+    node      = %Gorpo.Node{id: "consul", address: "localhost"}
+    service_0 = %Gorpo.Service{id: "foobar_0", name: "foobar", address: "localhost"}
+    service_1 = %Gorpo.Service{id: "foobar_1", name: "foobar", address: "localhost"}
+    service_2 = %Gorpo.Service{id: "foobar_2", name: "foobar", address: "localhost"}
     status_0  = %Gorpo.Status{status: :passing}
     status_1  = %Gorpo.Status{status: :warning}
     status_2  = %Gorpo.Status{status: :critical}
-    payload   = Poison.encode!([%{"Service" => service_0,
+    payload   = Poison.encode!([%{"Node"    => node,
+                                  "Service" => service_0,
                                   "Checks"  => [%{"CheckID" => "aaa"}, %{"CheckID" => Gorpo.Service.check_id(service_0), "Status" => status_0.status}]},
-                                %{"Service" => service_1,
+                                %{"Node"    => node,
+                                  "Service" => service_1,
                                   "Checks"  => [%{"CheckID" => "bbb"}, %{"CheckID" => Gorpo.Service.check_id(service_1), "Status" => status_1.status}]},
-                                %{"Service" => service_2,
+                                %{"Node"    => node,
+                                  "Service" => service_2,
                                   "Checks"  => [%{"CheckID" => "ccc"}, %{"CheckID" => Gorpo.Service.check_id(service_2), "Status" => status_2.status}]}])
     driver    = Gorpo.Drivers.Echo.success([status: 200, payload: payload])
     agent     = %Gorpo.Consul{endpoint: "endpoint", token: "token", driver: driver}
 
     {:ok, reply} = Gorpo.Consul.services(agent, "foobar")
-    assert [{service_0, status_0},
-            {service_1, status_1},
-            {service_2, status_2}] == reply
+    assert [{node, service_0, status_0},
+            {node, service_1, status_1},
+            {node, service_2, status_2}] == reply
   end
 
   test "session create " do
