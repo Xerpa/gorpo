@@ -13,7 +13,7 @@ defmodule Gorpo.Announce.UnitTest do
   test "announce without check" do
     service = %Gorpo.Service{}
     {:ok, state} = Gorpo.Announce.Unit.init(state(service: service))
-    assert (5 * 60 * 1000) == state[:tick]
+    assert (5 * 60 * 1000) == state.tick
   end
 
   test "announce tick with check" do
@@ -24,15 +24,15 @@ defmodule Gorpo.Announce.UnitTest do
                           {"100", 50}] do
       service = %Gorpo.Service{id: "foobar", name: "foobar", check: %Gorpo.Check{ttl: ttl}}
       {:ok, state} = Gorpo.Announce.Unit.init(state(service: service))
-      assert expect == state[:tick]
-      assert expect == state[:wait]
+      assert expect == state.tick
+      assert expect == state.wait
     end
   end
 
   test "success initialization" do
     {:ok, state}      = Gorpo.Announce.Unit.init(state())
     {:reply, stat, _} = Gorpo.Announce.Unit.handle_call(:stat, nil, state)
-    assert state[:wait] == state[:tick]
+    assert state.wait == state.tick
     assert :ok == stat[:service]
     assert :ok == stat[:heartbeat]
   end
@@ -42,7 +42,7 @@ defmodule Gorpo.Announce.UnitTest do
 
     {:ok, state}      = Gorpo.Announce.Unit.init(state(consul: consul))
     {:reply, stat, _} = Gorpo.Announce.Unit.handle_call(:stat, nil, state)
-    assert state[:wait] > state[:tick]
+    assert state.wait > state.tick
     assert :error == stat[:service]
     assert :error == stat[:heartbeat]
   end

@@ -51,55 +51,77 @@ defmodule Gorpo.Announce do
       ...> |> Keyword.keys
       [:service, :heartbeat]
   """
+
   use GenServer
+
   require Logger
 
-  @typep state_t :: [services: [Gorpo.Service.t], consul: Gorpo.Consul.t, supervisor: pid]
+  defstruct [:services, :consul, :supervisor]
 
+  @typep state :: %__MODULE__{
+    services: [Gorpo.Service.t],
+    consul: Gorpo.Consul.t,
+    supervisor: pid
+  }
+
+  @spec start_link(Gorpo.Consul.t, [Gorpo.Service.t]) :: GenServer.on_start
   @doc """
-  starts this process. you must provide a valid consul structure in
-  the first argument and an optional list of services. Notice that
-  this process gets started by the `Gorpo` application which means you
-  shouldn't need to manage it directly.
+  Starts this process.
+
+  You must provide a valid Consul structure in the first argument and an
+  optional list of services. Notice that this process gets started by the
+  `Gorpo` application which means you shouldn't need to manage it directly.
   """
-  @spec start_link(Gorpo.Consul.t, [Gorpo.Service.t]) :: {:ok, pid}
   def start_link(consul, services \\ []) do
     GenServer.start_link(__MODULE__, [services: services, consul: consul], name: __MODULE__)
   end
 
+  @spec init(Keyword.t) :: {:ok, state}
   @doc false
-  @spec init(state_t) :: {:ok, state_t}
-  def init(state) do
-    consul     = Keyword.fetch!(state, :consul)
-    {:ok, pid} = state
-    |> Keyword.fetch!(:services)
-    |> Enum.map(& svc_spec(consul, &1))
-    |> Supervisor.start_link(strategy: :one_for_one)
+  def init(params) do
+    consul = Keyword.fetch!(params, :consul)
+    services = Keyword.fetch!(params, :services)
 
-    {:ok, Keyword.put(state, :supervisor, pid)}
+    {:ok, supervisor} =
+      services
+      |> Enum.map(& child_service(consul, &1))
+      |> Supervisor.start_link(strategy: :one_for_one)
+
+    state = %__MODULE__{
+      consul: consul,
+      services: services,
+      supervisor: supervisor
+    }
+
+    {:ok, state}
   end
 
+  @spec register(Gorpo.Service.t) :: :ok | {:error, term}
   @doc """
-  register a service. it uses the `Gorpo.Service.id` to avoid
-  registering de process twice. nevertheless, it is ok to invoke this
-  function multiple times -- only one process will get registered.
+  Registers a service.
 
-  Each service starts a `Gorpo.Announce.Unit` process. You may use
-  the `whereis` to find its pid later.
+  It uses the `Gorpo.Service.id` to avoid registering the process twice.
+  Nevertheless, it is ok to invoke this function multiple times - only one
+  process will get registered.
+
+  Each service starts a `Gorpo.Announce.Unit` process. You may use the `whereis`
+  to find its pid later.
 
       iex> service = %Gorpo.Service{id: "foo", name: "bar"}
       iex> :ok = Gorpo.Announce.register(service)
       iex> Gorpo.Announce.register(service)
       :ok
   """
-  @spec register(Gorpo.Service.t) :: :ok | {:error, term}
   def register(service) do
     GenServer.call(__MODULE__, {:register, service})
   end
 
+  @spec unregister(Gorpo.Service.t) :: :ok | {:error, term}
   @doc """
-  unregister a service. differently from register it is an error to
-  try to unregister a service that doesn't exist.
+  Unregisters a service.
+
+  Differently from register it is an error to try to unregister a service that
+  doesn't exist.
 
       iex> service = %Gorpo.Service{id: "foo", name: "bar"}
       iex> :ok = Gorpo.Announce.register(service)
@@ -107,94 +129,90 @@ defmodule Gorpo.Announce do
       iex> Gorpo.Announce.unregister(service)
       {:error, :not_found}
   """
-  @spec unregister(Gorpo.Service.t) :: :ok | {:error, term}
   def unregister(service) do
     GenServer.call(__MODULE__, {:unregister, service})
   end
 
-  @doc """
-  returns the pid of the `Gorpo.Announce.Unit` process of a given
-  service. Returns either the pid of the process or `:unknown`.
-  """
   @spec whereis(Gorpo.Service.t) :: pid | :unknown
+  @doc """
+  Returns the pid of the `Gorpo.Announce.Unit` process of a given service.
+
+  Returns either the pid of the process or `:unknown`.
+  """
   def whereis(service) do
     GenServer.call(__MODULE__, {:whereis, service})
   end
 
+  @spec terminate(term, state) :: :ok
   @doc false
-  @spec terminate(term, state_t) :: :ok
   def terminate(reason, state) do
-    sup = Keyword.fetch!(state, :supervisor)
-    Supervisor.stop(sup, reason)
+    Supervisor.stop(state.supervisor, reason)
   end
 
+  @spec handle_call(:killall, GenServer.from, state) :: {:reply, :ok, state}
   @doc false
-  @spec handle_call(
-    {:register | :unregister, Gorpo.Service.t},
-    GenServer.from,
-    state_t
-  ) :: {:reply, :ok | {:error, term}, state_t}
-  def handle_call(request, _from, state) do
-    case request do
-      :killall               -> do_killall(state)
-      {:whereis, service}    -> do_whereis(service, state)
-      {:register, service}   -> do_register(service, state)
-      {:unregister, service} -> do_unregister(service, state)
-    end
-  end
-
-  defp do_register(service, state) do
-    sup    = Keyword.fetch!(state, :supervisor)
-    consul = Keyword.fetch!(state, :consul)
-    case Supervisor.start_child(sup, svc_spec(consul, service)) do
-      {:error, {:already_started, _pid}} -> {:reply, :ok, state}
-      {:ok, _pid}                        -> {:reply, :ok, state}
-      error                              -> {:reply, error, state}
-    end
-  end
-
-  defp do_unregister(service, state) do
-    sup   = Keyword.fetch!(state, :supervisor)
-    svcid = Gorpo.Service.id(service)
-    reply = with {:reply, pid, _} when is_pid(pid) <- do_whereis(service, state) do
-              :ok = GenServer.stop(pid)
-              Supervisor.delete_child(sup, svcid)
-            else
-              {:reply, :unknown, _} -> {:error, :not_found}
-            end
-    {:reply, reply, state}
-  end
-
-  defp do_killall(state) do
-    sup = Keyword.fetch!(state, :supervisor)
-    :ok = Supervisor.which_children(sup)
+  def handle_call(:killall, _, state) do
+    state.supervisor
+    |> Supervisor.which_children()
     |> Enum.each(fn {id, _, _, _} ->
-      with (:ok <- Supervisor.terminate_child(sup, id)) do
-        Supervisor.delete_child(sup, id)
+      with :ok <- Supervisor.terminate_child(state.supervisor, id) do
+        Supervisor.delete_child(state.supervisor, id)
       end
     end)
+
     {:reply, :ok, state}
   end
 
-  defp do_whereis(service, state) do
-    sup   = Keyword.fetch!(state, :supervisor)
-    svcid = Gorpo.Service.id(service)
-    Supervisor.which_children(sup)
-    |> Enum.filter_map(fn {id, pid, type, _} ->
-      id == svcid and type == :worker and is_pid(pid)
-    end, fn {_, pid, _, _} ->
-      pid
-    end)
-    |> case do
-         [pid]      -> {:reply, pid, state}
-         _otherwise -> {:reply, :unknown, state}
-       end
+  @spec handle_call({:whereis, Gorpo.Service.t}, GenServer.from, state) :: {:reply, pid | :unknown, state}
+  def handle_call({:whereis, service}, _, state) do
+    service_id = Gorpo.Service.id(service)
+
+    location =
+      state.supervisor
+      |> Supervisor.which_children()
+      |> Enum.find_value(:unknown, fn {id, pid, type, _} ->
+        id == service_id
+        && type == :worker
+        && pid
+      end)
+
+    {:reply, location, state}
   end
 
-  defp svc_spec(consul, service) do
-    svcid = Gorpo.Service.id(service)
-    Supervisor.Spec.worker(Gorpo.Announce.Unit, [[consul: consul, service: service]],
-      id: svcid, restart: :transient, shutdown: 5_000)
+  @spec handle_call({:register, Gorpo.Service.t}, GenServer.from, state) :: {:reply, :ok | {:error, term}, state}
+  def handle_call({:register, service}, _, state) do
+    child = child_service(state.consul, service)
+
+    case Supervisor.start_child(state.supervisor, child) do
+      {:error, {:already_started, _pid}} ->
+        {:reply, :ok, state}
+      {:ok, _pid} ->
+        {:reply, :ok, state}
+      error ->
+        {:reply, error, state}
+    end
   end
 
+  @spec handle_call({:unregister, Gorpo.Service.t}, GenServer.from, state) :: {:reply, :ok | {:error, :not_found}, state}
+  def handle_call({:unregister, service}, _, state) do
+    service_id = Gorpo.Service.id(service)
+
+    case Supervisor.terminate_child(state.supervisor, service_id) do
+      :ok ->
+        Supervisor.delete_child(state.supervisor, service_id)
+        {:reply, :ok, state}
+      {:error, :not_found} ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  @spec child_service(Gorpo.Consul.t, Gorpo.Service.t) :: Supervisor.Spec.spec
+  defp child_service(consul, service) do
+    Supervisor.Spec.worker(
+      Gorpo.Announce.Unit,
+      [[consul: consul, service: service]],
+      id: Gorpo.Service.id(service),
+      restart: :transient,
+      shutdown: 5_000)
+  end
 end

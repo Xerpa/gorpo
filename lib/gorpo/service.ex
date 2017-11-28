@@ -25,7 +25,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 defmodule Gorpo.Service do
   @moduledoc """
-  consul service definition.
+  Consul service definition.
 
   <dl>
     <dt>id</dt>
@@ -48,63 +48,81 @@ defmodule Gorpo.Service do
   </dl>
   """
 
-  defstruct [id: nil, name: nil, address: nil, port: nil, tags: nil, check: nil]
+  defstruct [:id, :name, :address, :port, :tags, :check]
 
-  @type t :: %__MODULE__{id: String.t,
-                         name: String.t,
-                         address: String.t | nil,
-                         port: integer | nil,
-                         tags: [String.t] | nil,
-                         check: Gorpo.Check.t | nil}
+  @type t :: %__MODULE__{
+    id: String.t,
+    name: String.t,
+    address: String.t | nil,
+    port: 0..65_535 | nil,
+    tags: [String.t] | nil,
+    check: Gorpo.Check.t | nil
+  }
 
+  @spec dump(t) :: %{String.t => term}
   @doc """
-  encodes the service into a map that once json-encoded matches the
-  consul service definition specification.
+  Encodes the service into a map that once json-encoded matches the Consul
+  service definition specification.
   """
-  @spec dump(t) :: map()
   def dump(service) do
-    [{"ID", service.id},
-     {"Name", service.name},
-     {"Tags", service.tags},
-     {"Port", service.port},
-     {"Address", service.address},
-     {"check", (if service.check, do: Gorpo.Check.dump(service.check))}]
-    |> Enum.filter(fn {_, x} -> not is_nil(x) end)
-    |> Enum.into(%{})
+    check =
+      service.check
+      && Gorpo.Check.dump(service.check)
+      || nil
+
+    params = [
+      {"ID", service.id},
+      {"Name", service.name},
+      {"Tags", service.tags},
+      {"Port", service.port},
+      {"Address", service.address},
+      {"check", check}
+    ]
+
+    params
+    |> Enum.reject(fn {_, x} -> is_nil(x) end)
+    |> Map.new()
   end
 
-  @doc """
-  parses a consul service definition into a `Service` struct.
-  """
   @spec load(String.t, map) :: t
+  @doc """
+  Parses a Consul service definition into a `Service` struct.
+  """
   def load(name, data) do
-    struct(__MODULE__,
+    %__MODULE__{
       id: data["ID"],
       name: Map.get(data, "Name", name),
       port: data["Port"],
       tags: data["Tags"],
-      address: data["Address"])
+      address: data["Address"]
+    }
   end
 
-  @doc """
-  returns the id that can be used to refer to a check assoaciated with
-  a given service.
-  """
   @spec check_id(t) :: String.t | nil
+  @doc """
+  Returns the id that can be used to refer to a check assoaciated with a given
+  service.
+  """
   def check_id(service) do
-    if service.id || service.name,
-      do: "service:" <> (service.id || service.name)
+    if service.id || service.name do
+      "service:" <> (service.id || service.name)
+    else
+      nil
+    end
   end
 
   @doc """
-  returns the service id
+  Returns the service id.
   """
-  @spec id(t) :: term
-  def id(service), do: {service.id, service.name}
+  @spec id(t) :: {String.t, String.t | nil}
+  def id(%__MODULE__{id: id, name: name}),
+    do: {id, name}
 end
 
 defimpl Poison.Encoder, for: Gorpo.Service do
   def encode(service, opts) do
-    Poison.Encoder.encode(Gorpo.Service.dump(service), opts)
+    service
+    |> Gorpo.Service.dump()
+    |> Poison.Encoder.encode(opts)
   end
 end

@@ -25,34 +25,30 @@
 # POSSIBILITY OF SUCH DAMAGE.
 defmodule Gorpo.Consul do
   @moduledoc """
-  consul API interface.
+  Consul API interface.
   """
 
   defstruct [:endpoint, :token, :driver]
 
-  @type url_t :: String.t
+  @type url :: String.t
+  @type method :: :get | :put
+  @type options :: keyword
+  @type headers :: list
+  @type payload :: binary | nil
 
-  @type method_t :: :get | :put
 
-  @type options_t :: keyword
+  @type reply :: error_reply | ok_reply
+  @type ok_reply :: {:ok, [payload: term, headers: keyword, status: integer]}
+  @type error_reply :: {:error, {:http, [payload: term, headers: keyword, status: integer]}} | {:error, {:driver, any}}
+  @type t :: %__MODULE__{
+    endpoint: String.t,
+    token: String.t | nil,
+    driver: ((method, url, headers, payload, options) -> reply)
+  }
 
-  @type headers_t :: list
+  @type session :: String.t
 
-  @type payload_t :: binary | nil
-
-  @type reply_t :: error_reply_t | ok_reply_t
-
-  @type ok_reply_t :: {:ok, [payload: term, headers: keyword, status: integer]}
-
-  @type error_reply_t :: {:error, {:http, [payload: term, headers: keyword, status: integer]}}
-                         | {:error, {:driver, any}}
-
-  @type t :: %__MODULE__{endpoint: String.t,
-                         token: String.t | nil,
-                         driver: (method_t, url_t, headers_t, payload_t, options_t -> reply_t)}
-
-  @type session_t :: String.t
-
+  @spec services(t, String.t, [dc: String.t, tag: String.t, near: boolean, status: :passing]) :: {:ok, [{Gorpo.Service.t, Gorpo.Status.status | nil}]} | error_reply
   @doc """
   search for services.
 
@@ -68,220 +64,291 @@ defmodule Gorpo.Consul do
        + `status`: only services that have this state;
 
   """
-  @spec services(t,
-    String.t,
-    [dc: String.t, tag: String.t, near: boolean, status: :passing]
-  ) :: {:ok, [Gorpo.Service.t]} | error_reply_t
   def services(cfg, svcname, filters \\ []) do
-    path   = "/v1/health/service/#{svcname}"
-    params = Enum.reduce(filters, [], fn {k, v}, acc ->
-      case {k, v} do
-        {:near, true}                   -> [{:near, :_agent} | acc]
-        {:near, false}                  -> acc
-        {:status, :passing}             -> [{:passing, nil}]
-        {:tag, tag} when is_binary(tag) -> [{:tag, tag} | acc]
-        {:dc, dc} when is_binary(dc)    -> [{k, v} | acc]
-      end
+    path = "/v1/health/service/#{svcname}"
+    params = Enum.reduce(filters, [], fn
+      {:near, true}, acc ->
+        [{:near, :_agent} | acc]
+      {:near, false}, acc ->
+        acc
+      {:tag, tag}, acc when is_binary(tag) ->
+        [{:tag, tag} | acc]
+      {:dc, dc}, acc when is_binary(dc) ->
+        [{:dc, dc} | acc]
+      {:status, :passing}, _ ->
+        [{:passing, nil}]
     end)
 
-    driver_req(cfg, :get, path, [{"accept", "application/json"}], nil, [params: params])
-    |> replyok_when(& &1[:status] == 200)
-    |> case do
+    headers = [{"accept", "application/json"}]
+    result =
+      cfg
+      |> driver_req(:get, path, headers, nil, params: params)
+      |> replyok_when(& &1[:status] == 200)
+
+    case result do
       {:ok, reply} ->
-        services = reply[:payload]
-        |> Poison.decode!
-        |> Enum.map(& load_service(svcname, &1))
+        services =
+          reply[:payload]
+          |> Poison.decode!()
+          |> Enum.map(& load_service(svcname, &1))
+
         {:ok, services}
-      reply       -> reply
+      reply ->
+        reply
     end
   end
 
+  @spec service_register(t, Gorpo.Service.t) :: reply
   @doc """
-  register/update a service
+  Register/update a service.
   """
-  @spec service_register(t, Gorpo.Service.t) :: reply_t
   def service_register(cfg, service) do
     path = "/v1/agent/service/register"
     json = Poison.encode!(service)
-    driver_req(cfg, :put, path, json_headers(), json, [])
+
+    cfg
+    |> driver_req(:put, path, json_headers(), json, [])
     |> replyok_when(& &1[:status] == 200)
   end
 
+  @spec service_deregister(t, String.t) :: reply
   @doc """
-  unregister a service
+  Unregister a service.
   """
-  @spec service_deregister(t, String.t) :: reply_t
   def service_deregister(cfg, svcid) do
     path = "/v1/agent/service/deregister/#{svcid}"
-    driver_req(cfg, :post, path, json_headers(), nil, [])
+
+    cfg
+    |> driver_req(:post, path, json_headers(), nil, [])
     |> replyok_when(& &1[:status] == 200)
   end
 
+  @spec check_update(t, Gorpo.Service.t, Gorpo.Status.t) :: ok_reply | {:error, :not_found}
   @doc """
   update health check status for a given service.
   """
-  @spec check_update(t, Gorpo.Service.t, Gorpo.Status.t) :: ok_reply_t | {:error, :not_found}
   def check_update(cfg, service, status) do
     check_id = Gorpo.Service.check_id(service)
+
     if check_id do
       json = Poison.encode!(status)
       path = "/v1/agent/check/update/#{check_id}"
-      driver_req(cfg, :put, path, json_headers(), json, [])
+
+      cfg
+      |> driver_req(:put, path, json_headers(), json, [])
       |> replyok_when(& &1[:status] == 200)
     else
       {:error, :not_found}
     end
   end
 
+  @spec session_create(t, [lock_delay: String.t, ttl: String.t, behaviour: String.t]) :: {:ok, session} | error_reply
   @doc """
-  acquires a new session using the TTL method.
+  Acquires a new session using the TTL method.
   """
-  @spec session_create(t, [lock_delay: String.t, ttl: String.t, behaviour: String.t]) :: {:ok, session_t} | error_reply_t
   def session_create(cfg, opts \\ [lock_delay: "15s", ttl: "60s", behaviour: "release"]) do
-    params = %{"LockDelay" => Keyword.get(opts, :lock_delay, "15s"),
-               "TTL" => Keyword.get(opts, :ttl, "60s"),
-               "Behavior" => Keyword.get(opts, :behaviour, "release")} |> Poison.encode!
+    params = %{
+      "LockDelay" => Keyword.get(opts, :lock_delay, "15s"),
+      "TTL" => Keyword.get(opts, :ttl, "60s"),
+      "Behavior" => Keyword.get(opts, :behaviour, "release")
+    }
+    params = Poison.encode!(params)
+
     path = "/v1/session/create"
-    driver_req(cfg, :put, path, json_headers(), params, [])
-    |> replyok_when(& &1[:status] == 200)
-    |> case do
-         {:ok, reply} ->
-           reply[:payload]
-           |> Poison.decode!
-           |> Map.fetch("ID")
-         error        -> error
-       end
+
+    result =
+      cfg
+      |> driver_req(:put, path, json_headers(), params, [])
+      |> replyok_when(& &1[:status] == 200)
+
+    case result do
+      {:ok, reply} ->
+        reply[:payload]
+        |> Poison.decode!
+        |> Map.fetch("ID")
+      error ->
+        error
+    end
   end
 
+  @spec session_destroy(t, session) :: :ok | error_reply
   @doc """
-  destroys a session.
+  Destroys a session.
   """
-  @spec session_destroy(t, session_t) :: :ok | error_reply_t
   def session_destroy(cfg, session_id) do
     path = "/v1/session/destroy/#{session_id}"
-    driver_req(cfg, :put, path, json_headers(), nil, [])
-    |> replyok_when(& &1[:status] == 200)
-    |> case do
-         {:ok, _} -> :ok
-         error    -> error
-       end
+
+    result =
+      cfg
+      |> driver_req(:put, path, json_headers(), nil, [])
+      |> replyok_when(& &1[:status] == 200)
+
+    case result do
+      {:ok, _} ->
+        :ok
+      error ->
+        error
+    end
   end
 
+  @spec session_info(t, session) :: {:ok, map} | {:error, :not_found} | error_reply
   @doc """
-  information about the session
+  Returns information about the session.
   """
-  @spec session_info(t, session_t) :: {:ok, map()} | {:error, :not_found} | error_reply_t
   def session_info(cfg, session_id) do
     path = "/v1/session/info/#{session_id}"
-    driver_req(cfg, :get, path, json_headers(), nil, [])
-    |> replyok_when(& &1[:status] == 200)
-    |> case do
-         {:ok, reply} ->
-           headers = reply
-           |> Keyword.get(:headers, [])
-           |> Enum.filter(fn {key, _} -> String.starts_with?(key, "x-consul-") end)
-           |> Enum.into(%{})
 
-           reply[:payload]
-           |> Poison.decode!
-           |> case do
-                nil    -> {:error, :not_found}
-                []     -> {:error, :not_found}
-                [data] -> {:ok, data, headers}
-              end
-         error        -> error
-       end
+    result =
+      cfg
+      |> driver_req(:get, path, json_headers(), nil, [])
+      |> replyok_when(& &1[:status] == 200)
+
+    case result do
+      {:ok, reply} ->
+        headers =
+          reply
+          |> Keyword.get(:headers, [])
+          |> Enum.filter(fn {key, _} -> String.starts_with?(key, "x-consul-") end)
+          |> Map.new()
+
+        case Poison.decode!(reply[:payload]) do
+          nil ->
+            {:error, :not_found}
+          [] ->
+            {:error, :not_found}
+          [data] ->
+            {:ok, data, headers}
+        end
+      error ->
+        error
+    end
   end
 
+  @spec session_renew(t, session) :: :ok | error_reply
   @doc """
-  renews a session
+  Renews a session.
   """
-  @spec session_renew(t, session_t) :: :ok | error_reply_t
   def session_renew(cfg, session_id) do
     path = "/v1/session/renew/#{session_id}"
-    driver_req(cfg, :put, path, json_headers(), nil, [])
-    |> replyok_when(& &1[:status] == 200)
-    |> case do
-         {:ok, _} -> :ok
-         error    -> error
-       end
+
+    result =
+      cfg
+      |> driver_req(:put, path, json_headers(), nil, [])
+      |> replyok_when(& &1[:status] == 200)
+
+    case result do
+      {:ok, _} ->
+        :ok
+      error ->
+        error
+    end
   end
 
+  @spec kv_put(t, String.t, binary) :: {:ok, term} | error_reply
   @doc """
-  inserts a value into consul
+  Inserts a value into consul.
   """
-  @spec kv_put(t, String.t, binary) :: {:ok, any} | error_reply_t
   def kv_put(cfg, key, body) do
     path = "/v1/kv/#{key}"
-    driver_req(cfg, :put, path, json_headers(), body, [])
-    |> replyok_when(& &1[:status] == 200)
-    |> case do
-         {:ok, reply} -> {:ok, Poison.decode!(reply[:payload])}
-         error        -> error
-       end
+
+    result =
+      cfg
+      |> driver_req(:put, path, json_headers(), body, [])
+      |> replyok_when(& &1[:status] == 200)
+
+    case result do
+      {:ok, reply} ->
+        {:ok, Poison.decode!(reply[:payload])}
+      error ->
+        error
+    end
   end
 
+  @spec kv_get(t, String.t) :: {:ok, term} | error_reply
   @doc """
-  retrieves values from consul
+  Retrieves values from consul.
   """
-  @spec kv_get(t, String.t) :: {:ok, any} | error_reply_t
   def kv_get(cfg, key) do
     path = "/v1/kv/#{key}"
-    driver_req(cfg, :get, path, json_headers(), nil, [])
-    |> replyok_when(& &1[:status] == 200)
-    |> case do
-         {:ok, reply} -> {:ok, Poison.decode!(reply[:payload])}
-         error        -> error
-       end
+
+    result =
+      cfg
+      |> driver_req(:get, path, json_headers(), nil, [])
+      |> replyok_when(& &1[:status] == 200)
+
+    case result do
+      {:ok, reply} ->
+        {:ok, Poison.decode!(reply[:payload])}
+      error ->
+        error
+    end
   end
 
+  @spec kv_delete(t, String.t) :: :ok | error_reply
   @doc """
-  removes a key from consul
+  Removes a key from consul.
   """
-  @spec kv_delete(t, String.t) :: :ok | error_reply_t
   def kv_delete(cfg, key) do
     path = "/v1/kv/#{key}"
-    driver_req(cfg, :delete, path, json_headers(), nil, [])
-    |> replyok_when(& &1[:status] == 200)
-    |> case do
-         {:ok, _} -> :ok
-         error    -> error
-       end
+
+    result =
+      cfg
+      |> driver_req(:delete, path, json_headers(), nil, [])
+      |> replyok_when(& &1[:status] == 200)
+
+    case result do
+      {:ok, _} ->
+        :ok
+      error ->
+        error
+    end
   end
 
-  defp json_headers, do: [{"content-type", "application/json"},
-                          {"accept", "application/json"}]
+  defp json_headers do
+    [
+      {"content-type", "application/json"},
+      {"accept", "application/json"}
+    ]
+  end
 
-  defp driver_req(cfg, method, path, headers, nil, options), do: driver_req(cfg, method, path, headers, "", options)
+  defp driver_req(cfg, method, path, headers, nil, options),
+    do: driver_req(cfg, method, path, headers, "", options)
   defp driver_req(cfg, method, path, headers, payload, options) do
-    url  = Enum.join([String.trim_trailing(cfg.endpoint, "/"),
-                      String.trim_leading(path, "/")], "/")
-    opts = if cfg.token,
-             do: Keyword.update(options, :params, [token: cfg.token], & Keyword.put_new(&1, :token, cfg.token)),
-             else: options
+    url = String.trim_trailing(cfg.endpoint, "/") <> "/" <> String.trim_leading(path, "/")
+
+    opts =
+      cfg.token
+      && Keyword.update(options, :params, [token: cfg.token], & Keyword.put_new(&1, :token, cfg.token))
+      || options
+
     cfg.driver.(method, url, headers, payload, opts)
   end
 
+  @spec replyok_when(term, ((term) -> boolean)) :: {:ok, term} | {:error, term}
   defp replyok_when(reply, predicate) do
     case reply do
       {:ok, reply} ->
-        if predicate.(reply),
-          do: {:ok, reply},
-          else: {:error, reply}
-      error        -> error
+        predicate.(reply)
+        && {:ok, reply}
+        || {:error, reply}
+      error ->
+        error
     end
   end
 
   defp load_service(name, data) do
     service = Gorpo.Service.load(name, Map.fetch!(data, "Service"))
-    data
-    |> Map.fetch!("Checks")
-    |> Enum.filter(& Map.get(&1, "CheckID") == Gorpo.Service.check_id(service))
-    |> Enum.map(&Gorpo.Status.load/1)
-    |> case do
-         []       -> {service, nil}
-         [status] -> {service, status}
-       end
-  end
+    result =
+      data
+      |> Map.fetch!("Checks")
+      |> Enum.filter(& Map.get(&1, "CheckID") == Gorpo.Service.check_id(service))
+      |> Enum.map(& Gorpo.Status.load/1)
 
+    case result do
+      [] ->
+        {service, nil}
+      [status] ->
+        {service, status}
+    end
+  end
 end
