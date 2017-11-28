@@ -51,7 +51,7 @@ defmodule Gorpo.Status do
   a status that is `warning`
   """
   @spec warning(String.t | nil) :: t
-  def warning(output \\ nil), do: struct(__MODULE__, status: :warinig, output: output)
+  def warning(output \\ nil), do: struct(__MODULE__, status: :warning, output: output)
 
   @doc """
   a status that is `critical`
