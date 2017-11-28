@@ -1,7 +1,7 @@
 defmodule Gorpo.Mixfile do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.1"
 
   def project do
     [
@@ -28,9 +28,9 @@ defmodule Gorpo.Mixfile do
 
   defp deps do
     [
-      {:poison, ">= 1.2.0"},
+      {:poison, ">= 2.0.0"},
       {:dialyxir, ">= 0.5.0", only: :dev, runtime: false},
-      {:ex_doc, ">= 0.14.3", only: :dev}
+      {:ex_doc, "~> 0.17", only: :dev}
     ]
   end
 
