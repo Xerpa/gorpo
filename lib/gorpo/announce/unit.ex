@@ -48,145 +48,190 @@ defmodule Gorpo.Announce.Unit do
       [service: :ok, heartbeat: :error]
   """
 
-  @type state_t    :: [service: %Gorpo.Service{}, consul: %Gorpo.Consul{}]
-
-  @typep istate_t :: [service: %Gorpo.Service{}, consul: %Gorpo.Consul{}, wait: integer, tick: integer, timer: :timer.tref]
-
   use GenServer
+
   require Logger
 
+  defstruct [:service, :consul, :wait, :tick, :timer, :status]
+
+  @type start_options :: [
+    service: Gorpo.Service.t,
+    consul: Gorpo.Consul.t
+  ]
+
+  @typep state :: %__MODULE__{
+    service: Gorpo.Service.t,
+    consul: Gorpo.Consul.t,
+    wait: pos_integer,
+    tick: pos_integer,
+    timer: :timer.tref | nil,
+    status: map
+  }
+
+  @spec stat(pid) :: [service: :ok | :error, heartbeat: :ok | :error]
   @doc """
-  returns a keyword list with the status of the service registration
-  and heatbeat.
+  Returns a keyword list with the status of the service registration and
+  heatbeat.
   """
-  @spec stat(pid) :: [service: :ok|:error, heartbeat: :ok|:error]
-  def stat(pid), do: GenServer.call(pid, :stat)
+  def stat(pid),
+    do: GenServer.call(pid, :stat)
+
+  @spec start_link(start_options) :: {:ok, pid}
+  @doc """
+  Starts this process.
+
+  Expects a keyword which describes the service to register and the Consul
+  configuration.
+  """
+  def start_link(state),
+    do: GenServer.start_link(__MODULE__, state)
 
   @doc """
-  starts this process. it expects a keyword list which describes the
-  service to register and the consul configuration.
-  """
-  @spec start_link(state_t) :: {:ok, pid}
-  def start_link(state), do: GenServer.start_link(__MODULE__, state)
-
-  @doc """
-  will register the service and perform the first health check update
+  Will register the service and perform the first health check update
   synchronously. an error registering the service or updating the
   check status will not impede the process initialization.
 
-  keep in mind that this may take a while as it will wait for both the
+  Keep in mind that this may take a while as it will wait for both the
   service registration and check update responses, which may take
   arbitrarily long depending on the consul backend in use.
   """
-  @spec init(state_t) :: {:ok, istate_t}
-  def init(state) do
-    svc   = state[:service]
-    tick  = tickof(svc)
-    state = state
-    |> Keyword.put(:tick, tick)
-    |> Keyword.put(:wait, tick)
+  def init(params) do
+    service = params[:service]
+    tick = tickof(service)
+
+    state = %__MODULE__{
+      service: service,
+      consul: params[:consul],
+      tick: tick,
+      wait: tick,
+      status: %{}
+    }
+
     {:noreply, state} = handle_info(:tick, state)
-    Logger.info("#{__MODULE__} register #{svc.name}.#{svc.id}: #{state[:service_state]}")
+
+    Logger.info("#{__MODULE__} register #{service.name}.#{service.id}: #{state.status[:service]}")
+
     {:ok, state}
   end
 
+  @spec terminate(term, state) :: :ok | :error
   @doc """
-  deregister the service on consul. returns an `:ok` on success or
-  `:error` otherwise.
+  Deregister the service on Consul. returns `:ok` on success or `:error`
+  otherwise.
   """
-  @spec terminate(term, istate_t) :: :ok | :error
   def terminate(_reason, state) do
-    if state[:timer],
-      do: Process.cancel_timer(state[:timer])
+    if state.timer do
+      Process.cancel_timer(state.timer)
+    end
 
-    service   = state[:service]
-    {stat, _} = Gorpo.Consul.service_deregister(state[:consul], service.id)
-    Logger.info("#{__MODULE__} deregister #{service.name}.#{service.id}: #{stat}")
-    stat
+    service = state.service
+    {status, _} = Gorpo.Consul.service_deregister(state.consul, service.id)
+
+    Logger.info("#{__MODULE__} deregister #{service.name}.#{service.id}: #{status}")
+
+    status
   end
 
   @doc false
-  @spec handle_info(:tick, istate_t) :: {:noreply, istate_t}
   def handle_info(:tick, state) do
-    if state[:timer],
-      do: Process.cancel_timer(state[:timer])
+    if state.timer do
+      Process.cancel_timer(state.timer)
+    end
 
-    service = state[:service]
-    svcstat = state[:service_stat]
-    svcname = "#{service.name}.#{service.id}"
+    service = state.service
+    status = Map.get(state.status, :service, :error)
+    name = "#{service.name}.#{service.id}"
+
     case process_tick(state) do
-      {:ok, state}          ->
-        if :ok != svcstat,
-          do: Logger.debug("#{__MODULE__} #{svcname}: ok")
-        timer = Process.send_after(self(), :tick, state[:wait])
-        {:noreply, st_ok(state) |> Keyword.put(:timer, timer)}
+      {:ok, state} ->
+        unless status == :ok do
+          Logger.debug "#{__MODULE__} #{name}: ok"
+        end
+
+        timer = Process.send_after(self(), :tick, state.wait)
+
+        state = %{state| timer: timer, wait: state.tick}
+
+        {:noreply, state}
       {:error, reason, state} ->
-        reason = inspect(reason)
-        Logger.warn "#{__MODULE__} #{svcname}: #{reason} [backoff: #{state[:wait]}]"
-        timer = Process.send_after(self(), :tick, state[:wait])
-        {:noreply, st_error(state) |> Keyword.put(:timer, timer)}
+        Logger.warn "#{__MODULE__} #{name}: #{inspect reason} [backoff: #{state.wait}]"
+
+        timer = Process.send_after(self(), :tick, state.wait)
+
+        state = %{
+          state|
+            timer: timer,
+            wait: min(state.wait * 2, 300_000),
+            status: %{}
+        }
+
+        {:noreply, state}
     end
   end
 
-  def handle_call(:stat, _from, state) do
-    reply = [service: Keyword.get(state, :service_stat, :error),
-             heartbeat: Keyword.get(state, :heartbeat_stat, :error)]
+  @doc false
+  def handle_call(:stat, _, state) do
+    reply = [
+      service: Map.get(state.status, :service, :error),
+      heartbeat: Map.get(state.status, :heartbeat, :error)
+    ]
+
     {:reply, reply, state}
   end
 
+  @spec process_tick(state) :: {:ok, state} | {:error, {:heartbeat | :service, term}, state}
   defp process_tick(state) do
-    case Keyword.fetch(state, :service_stat) do
-      {:ok, :ok} -> do_heartbeat(state)
-      :error     ->
-        with ({:ok, state} <- do_service(state)) do
+    case Map.fetch(state.status, :service) do
+      {:ok, :ok} ->
+        do_heartbeat(state)
+      :error ->
+        with {:ok, state} <- do_service(state) do
           do_heartbeat(state)
         end
     end
   end
 
+  @spec do_service(state) :: {:ok, state} | {:error, {:service, term}, state}
   defp do_service(state) do
-    case Gorpo.Consul.service_register(state[:consul], state[:service]) do
-      {:ok, _} -> {:ok, Keyword.put(state, :service_stat, :ok)}
-      error    -> {:error, {:service, error}, state}
+    case Gorpo.Consul.service_register(state.consul, state.service) do
+      {:ok, _} ->
+        {:ok, %{state| status: Map.put(state.status, :service, :ok)}}
+      error ->
+        {:error, {:service, error}, state}
     end
   end
 
+  @spec do_heartbeat(state) :: {:ok, state} | {:error, {:heartbeat, term}, state}
   defp do_heartbeat(state) do
-    if is_nil(state[:service].check) do
-      {:ok, state}
-    else
+    if state.service.check do
       status = Gorpo.Status.passing
-      case Gorpo.Consul.check_update(state[:consul], state[:service], status) do
-        {:ok, _} -> {:ok, Keyword.put(state, :heartbeat_stat, :ok)}
-        error    -> {:error, {:heartbeat, error}, state}
+
+      case Gorpo.Consul.check_update(state.consul, state.service, status) do
+        {:ok, _} ->
+          {:ok, %{state| status: Map.put(state.status, :heartbeat, :ok)}}
+        error ->
+          {:error, {:heartbeat, error}, state}
       end
+    else
+      {:ok, state}
     end
   end
 
-  defp st_ok(state) do
-    Keyword.put(state, :wait, state[:tick])
-  end
-
-  defp st_error(state) do
-    state
-    |> Keyword.delete(:service_stat)
-    |> Keyword.delete(:heartbeat_stat)
-    |> Keyword.put(:wait, min(state[:wait] * 2, 300_000))
-  end
-
+  @spec tickof(Gorpo.Service.t) :: pos_integer
   defp tickof(service) do
-    if (service.check) do
-      case Integer.parse(service.check.ttl) do
+    if service.check do
+      ms = case Integer.parse(service.check.ttl) do
         {n, "h"} -> n * 1000 * 60 * 60
         {n, "m"} -> n * 1000 * 60
         {n, "s"} -> n * 1000
         {n, ""}  -> n
       end
+
+      ms
       |> div(5)
       |> max(50)
     else
       5 * 1000 * 60
     end
   end
-
 end

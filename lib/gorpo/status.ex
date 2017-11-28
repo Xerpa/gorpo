@@ -38,53 +38,71 @@ defmodule Gorpo.Status do
 
   defstruct [:status, :output]
 
-  @type t :: %__MODULE__{status: :passing | :warning | :critical,
-                         output: String.t | nil}
+  @type output :: String.t | nil
+  @type status :: :passing | :warning | :critical
+  @type t :: %__MODULE__{
+    status: status,
+    output: output
+  }
 
+  @spec passing(output) :: t
   @doc """
-  a status that is `passing`
+  A status that is `passing`.
   """
-  @spec passing(String.t | nil) :: t
-  def passing(output \\ nil), do: struct(__MODULE__, status: :passing, output: output)
+  def passing(output \\ nil),
+    do: %__MODULE__{status: :passing, output: output}
 
+  @spec warning(output) :: t
   @doc """
-  a status that is `warning`
+  A status that is `warning`.
   """
-  @spec warning(String.t | nil) :: t
-  def warning(output \\ nil), do: struct(__MODULE__, status: :warning, output: output)
+  def warning(output \\ nil),
+    do: %__MODULE__{status: :warning, output: output}
 
+  @spec critical(output) :: t
   @doc """
-  a status that is `critical`
+  A status that is `critical`.
   """
-  @spec critical(String.t | nil) :: t
-  def critical(output \\ nil), do: struct(__MODULE__, status: :critical, output: output)
+  def critical(output \\ nil),
+    do: %__MODULE__{status: :critical, output: output}
 
+  @spec dump(t) :: %{String.t => term}
   @doc """
-  encodes the status into a map that once json-encoded matches the
-  consul status definition specification.
+  Encodes the status into a map that, once json-encoded, matches the Consul
+  status definition specification.
   """
-  @spec dump(t) :: map()
   def dump(status) do
-    %{"Status" => to_string(status.status),
-      "Output" => status.output}
+    %{
+      "Status" => to_string(status.status),
+      "Output" => status.output
+    }
   end
 
+  @spec load(%{String.t => term}) :: t
   @doc """
-  parses a consul status definition into a `Status` struct
+  Parses a consul status definition into a `Status` struct.
   """
   def load(data) do
-    struct(__MODULE__,
-      status: case data["Status"] do
-                "passing"  -> :passing
-                "warning"  -> :warning
-                "critical" -> :critical
-              end,
-      output: data["Output"])
+    status = case data["Status"] do
+      "passing" ->
+        :passing
+      "warning" ->
+        :warning
+      "critical" ->
+        :critical
+    end
+
+    %__MODULE__{
+      status: status,
+      output: data["Output"]
+    }
   end
 end
 
 defimpl Poison.Encoder, for: Gorpo.Status do
   def encode(status, opts) do
-    Poison.Encoder.encode(Gorpo.Status.dump(status), opts)
+    status
+    |> Gorpo.Status.dump()
+    |> Poison.Encoder.encode(opts)
   end
 end

@@ -47,9 +47,12 @@ defmodule Gorpo do
   nothing special: you may unregister them like other services you may
   have registered afterwords.
   """
+
   use Application
+
   require Logger
 
+  @spec start(any, any) :: {:ok, pid} | {:error, term}
   @doc """
   Starts the `Gorpo` application. `Application.put_env(:gorpo, ...)`
   may be used to configure where to find the consul agent and services
@@ -74,10 +77,9 @@ defmodule Gorpo do
 
       [check: [ttl: "1s"]]
   """
-  @spec start(any, any) :: {:ok, pid}
   def start(_type, _args) do
     :ok = inets_start()
-    consul   = new_consul()
+    consul = new_consul()
     services = read_services(announce_cfg())
     announce = Supervisor.Spec.worker(Gorpo.Announce, [consul, services], restart: :permanent)
     Supervisor.start_link([announce], strategy: :one_for_one)
@@ -90,11 +92,11 @@ defmodule Gorpo do
     end
   end
 
-  @doc """
-  uses the Application.get_env(:gorpo, :consul) to configure and
-  return Gorpo.Consul module.
-  """
   @spec new_consul() :: Gorpo.Consul.t
+  @doc """
+  Uses the `Application.get_env(:gorpo, :consul)` to configure and return
+  `Gorpo.Consul` module.
+  """
   def new_consul do
     read_consul(consul_cfg())
   end
@@ -108,9 +110,8 @@ defmodule Gorpo do
   defp read_services(config) do
     config
     |> Keyword.fetch!(:services)
-    |> Enum.filter_map(
-      & Keyword.get(&1, :enabled, true),
-      & read_service/1)
+    |> Enum.filter(& Keyword.get(&1, :enabled, true))
+    |> Enum.map(& read_service/1)
   end
 
   defp read_service(service) do

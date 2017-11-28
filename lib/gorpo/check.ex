@@ -39,27 +39,37 @@ defmodule Gorpo.Check do
   </dl>
   """
 
-  defstruct [ttl: "10s", deregister_critical_service_after: "10m"]
+  defstruct [
+    ttl: "10s",
+    deregister_critical_service_after: "10m"
+  ]
 
-  @type t :: %__MODULE__{ttl: String.t,
-                         deregister_critical_service_after: String.t}
+  @type t :: %__MODULE__{
+    ttl: String.t,
+    deregister_critical_service_after: String.t
+  }
 
   @doc """
-  encodes the check into a map that once json-encoded matches the
-  consul check definition specification.
+  Encodes the check into a map that once json-encoded matches the Consul check
+  definition specification.
   """
-  @spec dump(t) :: map()
+  @spec dump(t) :: map
   def dump(check) do
-    [{"TTL", check.ttl},
-     {"DeregisterCriticalServiceAfter", check.deregister_critical_service_after}]
-    |> Enum.filter(fn {_, x} -> not is_nil(x) end)
-    |> Enum.into(%{})
-  end
+    params = [
+      {"TTL", check.ttl},
+      {"DeregisterCriticalServiceAfter", check.deregister_critical_service_after}
+    ]
 
+    params
+    |> Enum.reject(fn {_, x} -> is_nil(x) end)
+    |> Map.new()
+  end
 end
 
 defimpl Poison.Encoder, for: Gorpo.Check do
   def encode(check, opts) do
-    Poison.Encoder.encode(Gorpo.Check.dump(check), opts)
+    check
+    |> Gorpo.Check.dump()
+    |> Poison.Encoder.encode(opts)
   end
 end
