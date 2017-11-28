@@ -7,7 +7,7 @@ defmodule Gorpo.Mixfile do
     [
       app: :gorpo,
       version: @version,
-      elixir: ">= 1.2.0",
+      elixir: ">= 1.3.0",
       build_embedded: Mix.env == :prod,
       start_permanent: Mix.env == :prod,
       deps: deps(),
