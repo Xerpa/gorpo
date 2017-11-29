@@ -36,6 +36,11 @@ defmodule Gorpo.Consul do
   @type headers :: list
   @type payload :: binary | nil
 
+  @type filter ::
+    {:dc, String.t}
+    | {:tag, String.t}
+    | {:near, boolean}
+    | {:status, :passing}
 
   @type reply :: error_reply | ok_reply
   @type ok_reply :: {:ok, [payload: term, headers: keyword, status: integer]}
@@ -48,7 +53,7 @@ defmodule Gorpo.Consul do
 
   @type session :: String.t
 
-  @spec services(t, String.t, [dc: String.t, tag: String.t, near: boolean, status: :passing]) :: {:ok, [{Gorpo.Service.t, Gorpo.Status.status | nil}]} | error_reply
+  @spec services(t, String.t, [filter]) :: {:ok, [{Gorpo.Node.t, Gorpo.Service.t, Gorpo.Status.status | nil}]} | error_reply
   @doc """
   search for services.
 
@@ -64,8 +69,8 @@ defmodule Gorpo.Consul do
        + `status`: only services that have this state;
 
   """
-  def services(cfg, svcname, filters \\ []) do
-    path = "/v1/health/service/#{svcname}"
+  def services(consul, service_name, filters \\ []) do
+    path = "/v1/health/service/#{service_name}"
     params = Enum.reduce(filters, [], fn
       {:near, true}, acc ->
         [{:near, :_agent} | acc]
@@ -81,7 +86,7 @@ defmodule Gorpo.Consul do
 
     headers = [{"accept", "application/json"}]
     result =
-      cfg
+      consul
       |> driver_req(:get, path, headers, nil, params: params)
       |> replyok_when(& &1[:status] == 200)
 
@@ -90,7 +95,7 @@ defmodule Gorpo.Consul do
         services =
           reply[:payload]
           |> Poison.decode!()
-          |> Enum.map(& load_service(svcname, &1))
+          |> Enum.map(& load_service(service_name, &1))
 
         {:ok, services}
       reply ->
@@ -102,11 +107,11 @@ defmodule Gorpo.Consul do
   @doc """
   Register/update a service.
   """
-  def service_register(cfg, service) do
+  def service_register(consul, service) do
     path = "/v1/agent/service/register"
     json = Poison.encode!(service)
 
-    cfg
+    consul
     |> driver_req(:put, path, json_headers(), json, [])
     |> replyok_when(& &1[:status] == 200)
   end
@@ -115,10 +120,10 @@ defmodule Gorpo.Consul do
   @doc """
   Unregister a service.
   """
-  def service_deregister(cfg, svcid) do
-    path = "/v1/agent/service/deregister/#{svcid}"
+  def service_deregister(consul, service_id) do
+    path = "/v1/agent/service/deregister/#{service_id}"
 
-    cfg
+    consul
     |> driver_req(:post, path, json_headers(), nil, [])
     |> replyok_when(& &1[:status] == 200)
   end
@@ -127,14 +132,14 @@ defmodule Gorpo.Consul do
   @doc """
   update health check status for a given service.
   """
-  def check_update(cfg, service, status) do
+  def check_update(consul, service, status) do
     check_id = Gorpo.Service.check_id(service)
 
     if check_id do
       json = Poison.encode!(status)
       path = "/v1/agent/check/update/#{check_id}"
 
-      cfg
+      consul
       |> driver_req(:put, path, json_headers(), json, [])
       |> replyok_when(& &1[:status] == 200)
     else
@@ -146,7 +151,7 @@ defmodule Gorpo.Consul do
   @doc """
   Acquires a new session using the TTL method.
   """
-  def session_create(cfg, opts \\ [lock_delay: "15s", ttl: "60s", behaviour: "release"]) do
+  def session_create(consul, opts \\ [lock_delay: "15s", ttl: "60s", behaviour: "release"]) do
     params = %{
       "LockDelay" => Keyword.get(opts, :lock_delay, "15s"),
       "TTL" => Keyword.get(opts, :ttl, "60s"),
@@ -157,7 +162,7 @@ defmodule Gorpo.Consul do
     path = "/v1/session/create"
 
     result =
-      cfg
+      consul
       |> driver_req(:put, path, json_headers(), params, [])
       |> replyok_when(& &1[:status] == 200)
 
@@ -175,11 +180,11 @@ defmodule Gorpo.Consul do
   @doc """
   Destroys a session.
   """
-  def session_destroy(cfg, session_id) do
+  def session_destroy(consul, session_id) do
     path = "/v1/session/destroy/#{session_id}"
 
     result =
-      cfg
+      consul
       |> driver_req(:put, path, json_headers(), nil, [])
       |> replyok_when(& &1[:status] == 200)
 
@@ -195,11 +200,11 @@ defmodule Gorpo.Consul do
   @doc """
   Returns information about the session.
   """
-  def session_info(cfg, session_id) do
+  def session_info(consul, session_id) do
     path = "/v1/session/info/#{session_id}"
 
     result =
-      cfg
+      consul
       |> driver_req(:get, path, json_headers(), nil, [])
       |> replyok_when(& &1[:status] == 200)
 
@@ -228,11 +233,11 @@ defmodule Gorpo.Consul do
   @doc """
   Renews a session.
   """
-  def session_renew(cfg, session_id) do
+  def session_renew(consul, session_id) do
     path = "/v1/session/renew/#{session_id}"
 
     result =
-      cfg
+      consul
       |> driver_req(:put, path, json_headers(), nil, [])
       |> replyok_when(& &1[:status] == 200)
 
@@ -248,11 +253,11 @@ defmodule Gorpo.Consul do
   @doc """
   Inserts a value into consul.
   """
-  def kv_put(cfg, key, body) do
+  def kv_put(consul, key, body) do
     path = "/v1/kv/#{key}"
 
     result =
-      cfg
+      consul
       |> driver_req(:put, path, json_headers(), body, [])
       |> replyok_when(& &1[:status] == 200)
 
@@ -268,11 +273,11 @@ defmodule Gorpo.Consul do
   @doc """
   Retrieves values from consul.
   """
-  def kv_get(cfg, key) do
+  def kv_get(consul, key) do
     path = "/v1/kv/#{key}"
 
     result =
-      cfg
+      consul
       |> driver_req(:get, path, json_headers(), nil, [])
       |> replyok_when(& &1[:status] == 200)
 
@@ -288,11 +293,11 @@ defmodule Gorpo.Consul do
   @doc """
   Removes a key from consul.
   """
-  def kv_delete(cfg, key) do
+  def kv_delete(consul, key) do
     path = "/v1/kv/#{key}"
 
     result =
-      cfg
+      consul
       |> driver_req(:delete, path, json_headers(), nil, [])
       |> replyok_when(& &1[:status] == 200)
 
@@ -311,17 +316,17 @@ defmodule Gorpo.Consul do
     ]
   end
 
-  defp driver_req(cfg, method, path, headers, nil, options),
-    do: driver_req(cfg, method, path, headers, "", options)
-  defp driver_req(cfg, method, path, headers, payload, options) do
-    url = String.trim_trailing(cfg.endpoint, "/") <> "/" <> String.trim_leading(path, "/")
+  defp driver_req(consul, method, path, headers, nil, options),
+    do: driver_req(consul, method, path, headers, "", options)
+  defp driver_req(consul, method, path, headers, payload, options) do
+    url = String.trim_trailing(consul.endpoint, "/") <> "/" <> String.trim_leading(path, "/")
 
     opts =
-      cfg.token
-      && Keyword.update(options, :params, [token: cfg.token], & Keyword.put_new(&1, :token, cfg.token))
+      consul.token
+      && Keyword.update(options, :params, [token: consul.token], & Keyword.put_new(&1, :token, consul.token))
       || options
 
-    cfg.driver.(method, url, headers, payload, opts)
+    consul.driver.(method, url, headers, payload, opts)
   end
 
   @spec replyok_when(term, ((term) -> boolean)) :: {:ok, term} | {:error, term}
@@ -336,20 +341,22 @@ defmodule Gorpo.Consul do
     end
   end
 
+  @spec load_service(String.t, map) :: {Gorpo.Node.t, Gorpo.Service.t, Gorpo.Status.t | nil}
   defp load_service(name, data) do
     node = Gorpo.Node.load(Map.fetch!(data, "Node"))
-    service_address =
-      fn address ->
-        if address == "" or is_nil(address) do
-          node.address
-        else
-          address
-        end
+    service_address = fn address ->
+      if address == "" or is_nil(address) do
+        node.address
+      else
+        address
       end
+    end
+
     service =
       name
       |> Gorpo.Service.load(Map.fetch!(data, "Service"))
       |> Map.update!(:address, service_address)
+
     result =
       data
       |> Map.fetch!("Checks")
