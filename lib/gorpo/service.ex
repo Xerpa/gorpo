@@ -48,14 +48,21 @@ defmodule Gorpo.Service do
   </dl>
   """
 
-  defstruct [:id, :name, :address, :port, :tags, :check]
+  defstruct [
+    id: nil,
+    name: nil,
+    address: nil,
+    port: nil,
+    tags: [],
+    check: nil
+  ]
 
   @type t :: %__MODULE__{
     id: String.t,
     name: String.t,
     address: String.t | nil,
     port: 0..65_535 | nil,
-    tags: [String.t] | nil,
+    tags: [String.t],
     check: Gorpo.Check.t | nil
   }
 
@@ -65,10 +72,7 @@ defmodule Gorpo.Service do
   service definition specification.
   """
   def dump(service) do
-    check =
-      service.check
-      && Gorpo.Check.dump(service.check)
-      || nil
+    check = if service.check, do: Gorpo.Check.dump(service.check)
 
     params = [
       {"ID", service.id},
@@ -93,7 +97,7 @@ defmodule Gorpo.Service do
       id: data["ID"],
       name: Map.get(data, "Name", name),
       port: data["Port"],
-      tags: data["Tags"],
+      tags: Map.get(data, "Tags", []),
       address: data["Address"]
     }
   end
@@ -106,8 +110,6 @@ defmodule Gorpo.Service do
   def check_id(service) do
     if service.id || service.name do
       "service:" <> (service.id || service.name)
-    else
-      nil
     end
   end
 
